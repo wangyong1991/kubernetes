@@ -1,2 +1,2 @@
-FROM irrorgooglecontainers/etcd-amd64:3.2.24
+FROM mirrorgooglecontainers/etcd-amd64:3.2.24
 MAINTAINER WangYong
