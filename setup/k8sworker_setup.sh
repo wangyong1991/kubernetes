@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # 检查命令执行是否成功
 function check_cmd_result ()
 {
@@ -121,7 +123,7 @@ function init_kubelet()
 {
   echo "----------------安装 cni/kubelet/kubeadm/kubectl--------------------"
   # 安装 cni/kubelet/kubeadm/kubectl
-  sudo yum install -y kubelet-${KUBE_VERSION} kubeadm-${KUBE_VERSION} kubectl-${KUBE_VERSION} --disableexcludes=kubernetes
+  sudo yum install -y kubernetes-cni-0.6.0-0.x86_64 kubelet-${KUBE_VERSION} kubeadm-${KUBE_VERSION} kubectl-${KUBE_VERSION} --disableexcludes=kubernetes
   # 重新加载 kubelet.service 配置文件
   sudo systemctl daemon-reload
 
@@ -152,9 +154,10 @@ do
 done
 
 
-if[ "${KUBE_VERSION}" == ""] then
+if [ "${KUBE_VERSION}" = "" ];then
   KUBE_VERSION=1.13.1
 fi
+echo "Kubernetes版本：${KUBE_VERSION}"
 
 reset_env
 check_cmd_result

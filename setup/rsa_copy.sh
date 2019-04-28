@@ -1,12 +1,19 @@
 #!/bin/expect
 
-set USER [lindex $argv 0]
-set PASSWD [lindex $argv 1]
-set HOST [lindex $argv 2]
+set RSA_PATH [lindex $argv 0]
+set USER [lindex $argv 1]
+set PASSWD [lindex $argv 2]
+set HOST [lindex $argv 3]
 
-# echo $HOST; 
-spawn ssh-copy-id -i k8s_rsa.pub ${USER}@${HOST}
-expect "password:"
-send "${PASSWD}\r"
+set timeout 10
+spawn ssh-copy-id -i ${RSA_PATH} ${USER}@${HOST}
+
+expect {
+    "*password:" {
+        send "${PASSWD}\r"
+    }
+    "*already exist on the remote system*"
+    {
+    }
+}
 interact
-

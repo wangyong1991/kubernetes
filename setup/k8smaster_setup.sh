@@ -1,11 +1,14 @@
+#!/bin/bash
+
 # 帮助信息
 function help_info ()
 {
     echo "
     命令示例：sh k8smaster_setup.sh -m \"10.120.200.1,10.120.200.2,10.120.200.3\" \
                                    -n \"10.120.200.4,10.120.200.5,10.120.200.6\" \
-                                   -u root -p 123456 -v 1.13.1
+                                   -u root -p 123456 -v 1.13.1 -d true
     参数说明:
+        -d:dashboard    是否安装 kube-dashboard ,默认为false
         -m:masters      master IP列表，用逗号分隔
         -n:nodes        node IP列表，用逗号分隔
         -u:user         用户名，默认为当前登录用户
@@ -29,12 +32,17 @@ function check_cmd_result ()
 
 function easy_connect()
 {
-  if [ ! -f "~/.ssh/k8s_rsa" ];then
-    echo "----------------配置免密登录--------------------"
-    ssh-keygen -t rsa -N '' -f ~/.ssh/k8s_rsa -C "k8s-key"
+
+  echo "----------------配置免密登录--------------------"
+  if [ ! -f "${RSA_PATH}" ];then
+    ssh-keygen -t rsa -N '' -f ${RSA_PATH} -C "k8s-key"
   fi
   for host in ${K8S_MASTER_LIST[@]}; do
-      expect rsa_copy.sh ${KUBE_USER} ${PASSWD} ${host}
+      expect rsa_copy.sh ${RSA_PATH} ${KUBE_USER} ${PASSWD} ${host}
+  done
+
+  for host in ${K8S_NODE_LIST[@]}; do
+      expect rsa_copy.sh ${RSA_PATH} ${KUBE_USER} ${PASSWD} ${host}
   done
 }
 
@@ -53,10 +61,12 @@ function setup_ansible()
   rm -f k8s_hosts
   echo "[${ANSIBLE_K8S_MASTERS}]" >> k8s_hosts
   for host in ${K8S_MASTER_LIST[@]}; do
-    echo ${host} >> k8s_hosts
+    if [ "${host}" != "${IP}" ];then
+      echo ${host} >> k8s_hosts
+    fi
   done
 
-  echo "\n" >> k8s_hosts
+  echo "" >> k8s_hosts
 
   echo "[${ANSIBLE_K8S_NODES}]" >> k8s_hosts
   for host in ${K8S_NODE_LIST[@]}; do
@@ -122,12 +132,13 @@ function init_kubeadm()
   # 初始化master节点
   rm -f k8s_init.log
   sudo kubeadm init --config kubeadm.conf | tee k8s_init.log
+  KUBEADM_JOIN_CMD=`grep 'kubeadm join' k8s_init.log`
 
   echo "----------------重启 API Server--------------------"
   # 修改配置文件
   sudo sed -i 's/insecure-port=0/insecure-port=8080/g' /etc/kubernetes/manifests/kube-apiserver.yaml
   # 重启docker镜像
-  # sleep 5
+  sleep 10
   # sudo docker ps |grep 'kube-apiserver_kube-apiserver'|awk '{print $1}'|head -1|xargs sudo docker restart
 }
 
@@ -159,20 +170,65 @@ function install_nodes()
   sudo ansible ${ANSIBLE_K8S_NODES} --private-key=k8s_rsa -u ${KUBE_USER} -m command -a 'sh ~/k8sworker_setup.sh' --sudo
 }
 
-function kubeadm_join()
+function masters_join()
 {
-  KUBEADM_JOIN_CMD=`grep 'kubeadm join' k8s_init.log`
-  echo ${KUBEADM_JOIN_CMD}
   sudo ansible ${ANSIBLE_K8S_MASTERS} --private-key=k8s_rsa -u ${KUBE_USER} -m command -a "${KUBEADM_JOIN_CMD} --experimental-control-plane" --sudo
+}
+
+function nodes_join()
+{
   sudo ansible ${ANSIBLE_K8S_NODES} --private-key=k8s_rsa -u ${KUBE_USER} -m command -a "${KUBEADM_JOIN_CMD}" --sudo
+}
+
+function create_token()
+{
+  echo "----------------生成 Token--------------------"
+  KUBE_TOKEN=`sudo kubeadm token list | awk '{print $1}' | tail -1`
+  TOKEN_TTL=`sudo kubeadm token list | awk '{print $2}' | tail -1`
+  # 判断 token 是否已过期
+  if [[ "${KUBE_TOKEN}" = "" ]] || [[ "${TOKEN_TTL}" = "" ]] || [[ "${TOKEN_TTL}" = "0h" ]] ;then
+    echo "----------------Token 已过期，重新生成 Token--------------------"
+    KUBE_TOKEN=`sudo kubeadm token create`
+  fi
+  KUBE_CERT_HASH=`openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt | openssl rsa -pubin -outform der 2>/dev/null | openssl dgst -sha256 -hex | sed 's/^.* //'`
+
+  # kubeadm join 10.120.200.2:6443 --token abcdef.0123456789abcdef --discovery-token-ca-cert-hash sha256:965f3dd4c9c0c1d3e2258383360d1efe4f5285a05f48587ab49463d4b526145b
+  KUBEADM_JOIN_CMD="kubeadm join ${IP}:6443 --token ${KUBE_TOKEN} --discovery-token-ca-cert-hash sha256:${KUBE_CERT_HASH}"
+}
+
+function install_kube_dashboard()
+{
+  echo "----------------安装 kubernetes-dashboard --------------------"
+  # 创建Dashboard UI
+  sudo kubectl create -f kubernetes-dashboard.yaml
+  sudo kubectl -n kube-system get service kubernetes-dashboard
+}
+
+function install_calico()
+{
+  echo "----------------安装 Calico 网络插件--------------------"
+  sudo kubectl apply -f rbac.yaml
+  sed -i "s/etcd_endpoints: .*/etcd_endpoints: ${IP}:2379/g" calico.yaml
+  sudo kubectl apply -f calico.yaml
+}
+
+function install_flannel()
+{
+  echo "----------------安装 Flannel 网络插件 --------------------"
+  sudo kubectl apply -f rbac.yaml
+  sudo sysctl net.bridge.bridge-nf-call-iptables=1
+  sudo kubectl apply -f kube-flannel.yml
 }
 
 
 OLD_IFS="$IFS" 
 IFS="," 
-while getopts ":m:n:p:u:vh" opt
+while getopts ":d:m:n:p:u:vh" opt
 do
     case $opt in
+        d)
+            NEED_KUBE_DASHBOARD=($OPTARG)
+            ;;
         m)
             K8S_MASTER_LIST=($OPTARG)
             ;;
@@ -206,33 +262,38 @@ IFS="$OLD_IFS"
 cd ~
 
 IP=`/sbin/ifconfig -a|grep inet|grep -v 127.0.0.1|grep -v inet6|awk '{print $2}'|tr -d "addr:" | tail -1`
-if[ "${KUBE_USER}" == ""] then
+if [ "${KUBE_USER}" = "" ];then
   KUBE_USER=`whoami`
 fi
+
 ANSIBLE_K8S_MASTERS=k8s_masters
 ANSIBLE_K8S_NODES=k8s_nodes
+RSA_PATH="/home/${KUBE_USER}/.ssh/k8s_rsa"
 
-if[ "${PASSWD}" == ""] then
-  read -s -p "请输入密码: " PASSWD
+if [ "${PASSWD}" = "" ];then
+  read -s -p "请输入用户密码: " PASSWD
 fi
 
-if[ "${KUBE_VERSION}" == ""] then
+if [ "${KUBE_VERSION}" = "" ];then
   KUBE_VERSION=1.13.1
 fi
 
+echo ""
 echo "=============================================================="
 echo "Kubernetes版本：${KUBE_VERSION}"
 echo "本机IP：        ${IP}"
 echo "用户：          ${KUBE_USER}"
-echo "master 节点列表："
+echo "密码：          ${PASSWD}"
+echo "rsa文件目录：    ${RSA_PATH}"
+echo "Master 节点列表："
 for host in ${K8S_MASTER_LIST[@]}; do
     echo ${host}
-    if [ "${host}" == "${IP}" ] then
+    if [ "${host}" = "${IP}" ];then
       INIT_KUBEADM=true
     fi
 done
 
-echo "node 节点列表："
+echo "Node 节点列表："
 for host in ${K8S_NODE_LIST[@]}; do
     echo ${host}
 done
@@ -249,22 +310,37 @@ setup_ansible
 check_cmd_result
 
 # 如果 master 列表中包含本机IP，则初始化本机 kubernetes 环境
-if ${INIT_KUBEADM}
+if [ "${INIT_KUBEADM}" = "true" ];then
   # 安装本机
   sh k8sworker_setup.sh -v ${KUBE_VERSION}
 
   init_kubeadm
   check_cmd_result
-fi
-# 如果不包含，则获取 token，拼接 kubeadm join 命令
 
+  install_kube_dashboard
+  install_calico
+else
+  create_token
+fi
+
+if [ "${NEED_KUBE_DASHBOARD}" = "true" ];then
+  install_kube_dashboard
+if
+
+# 如果不包含，则获取 token，拼接 kubeadm join 命令
+echo ${KUBEADM_JOIN_CMD}
+
+# 部署 master 节点
 install_masters
-check_cmd_result
-install_nodes
 check_cmd_result
 copy_files
 check_cmd_result
-kubeadm_join
+masters_join
+
+# 部署 node 节点
+install_nodes
+check_cmd_result
+nodes_join
 check_cmd_result
 echo "集群节点列表："
 kubectl get nodes
