@@ -162,6 +162,7 @@ function install_masters()
 {
   sudo ansible ${ANSIBLE_K8S_MASTERS} --private-key=k8s_rsa -u ${KUBE_USER} -m copy -a "src=k8sworker_setup.sh dest=~/k8sworker_setup.sh" --sudo
   sudo ansible ${ANSIBLE_K8S_MASTERS} --private-key=k8s_rsa -u ${KUBE_USER} -m command -a 'sh ~/k8sworker_setup.sh' --sudo
+  sudo ansible ${ANSIBLE_K8S_MASTERS} --private-key=k8s_rsa -u ${KUBE_USER} -m command -a 'sed -i \'s/insecure-port=0/insecure-port=8080/g' /etc/kubernetes/manifests/kube-apiserver.yaml' --sudo
 }
 
 function install_nodes()

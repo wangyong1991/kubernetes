@@ -59,7 +59,7 @@ function setup_docker()
 {
 
   echo "----------------检查Docker是否安装--------------------"
-  sudo yum list installed | grep 'docker-ce'
+  sudo yum list installed | grep 'docker'
   if [  $? -ne 0 ];then
     echo "Docker未安装"
     echo "----------------安装 Docker--------------------"
@@ -72,6 +72,7 @@ function setup_docker()
     # 重启docker
     sudo systemctl enable docker
     sudo systemctl restart docker
+    sleep 10
   else
     echo "Docker已安装"
   fi
