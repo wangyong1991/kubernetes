@@ -1,3 +1,10 @@
+# Calico Version v2.5.1
+# https://docs.projectcalico.org/v2.5/releases#v2.5.1
+# This manifest includes the following component versions:
+#   calico/node:v2.5.1
+#   calico/cni:v1.10.0
+#   calico/kube-policy-controller:v0.7.0
+
 # This ConfigMap is used to configure a self-hosted Calico installation.
 kind: ConfigMap
 apiVersion: v1
@@ -15,12 +22,14 @@ data:
   cni_network_config: |-
     {
         "name": "k8s-pod-network",
+        "cniVersion": "0.1.0",
         "type": "calico",
         "etcd_endpoints": "__ETCD_ENDPOINTS__",
         "etcd_key_file": "__ETCD_KEY_FILE__",
         "etcd_cert_file": "__ETCD_CERT_FILE__",
         "etcd_ca_cert_file": "__ETCD_CA_CERT_FILE__",
         "log_level": "info",
+        "mtu": 1500,
         "ipam": {
             "type": "calico-ipam"
         },
@@ -33,16 +42,6 @@ data:
             "kubeconfig": "__KUBECONFIG_FILEPATH__"
         }
     }
-
-  # The default IP Pool to be created for the cluster.
-  # Pod IP addresses will be assigned from this pool.
-  ippool.yaml: |
-      apiVersion: v1
-      kind: ipPool
-      metadata:
-        cidr: 192.168.0.0/16
-      spec:
-        nat-outgoing: true
 
   # If you're using TLS enabled etcd uncomment the following.
   # You must also populate the Secret below with these files.
@@ -96,12 +95,13 @@ spec:
            {"key":"CriticalAddonsOnly", "operator":"Exists"}]
     spec:
       hostNetwork: true
+      serviceAccountName: calico-node
       containers:
         # Runs calico/node container on each Kubernetes node.  This
         # container programs network policy and routes on each
         # host.
         - name: calico-node
-          image: quay.io/calico/node:v1.0.2
+          image: docker2.yidian.com:5000/k8simages/node:v2.5.1
           env:
             # The location of the Calico etcd cluster.
             - name: ETCD_ENDPOINTS
@@ -115,18 +115,29 @@ spec:
                 configMapKeyRef:
                   name: calico-config
                   key: calico_backend
+            # Cluster type to identify the deployment type
+            - name: CLUSTER_TYPE
+              value: "k8s,bgp"
             # Disable file logging so `kubectl logs` works.
             - name: CALICO_DISABLE_FILE_LOGGING
               value: "true"
             # Set Felix endpoint to host default action to ACCEPT.
             - name: FELIX_DEFAULTENDPOINTTOHOSTACTION
               value: "ACCEPT"
-            # Don't configure a default pool.  This is done by the Job
-            # below.
-            - name: NO_DEFAULT_POOLS
-              value: "true"
+            # Configure the IP Pool from which Pod IPs will be chosen.
+            - name: CALICO_IPV4POOL_CIDR
+              value: "192.168.0.0/16"
+            - name: CALICO_IPV4POOL_IPIP
+              value: "always"
+            # Disable IPv6 on Kubernetes.
+            - name: FELIX_IPV6SUPPORT
+              value: "false"
+            # Set Felix logging to "info"
             - name: FELIX_LOGSEVERITYSCREEN
               value: "info"
+            # Set MTU for tunnel device used if ipip is enabled
+            - name: FELIX_IPINIPMTU
+              value: "1440"
             # Location of the CA certificate for etcd.
             - name: ETCD_CA_CERT_FILE
               valueFrom:
@@ -148,8 +159,25 @@ spec:
             # Auto-detect the BGP IP address.
             - name: IP
               value: ""
+            - name: FELIX_HEALTHENABLED
+              value: "true"
           securityContext:
             privileged: true
+          resources:
+            requests:
+              cpu: 250m
+          livenessProbe:
+            httpGet:
+              path: /liveness
+              port: 9099
+            periodSeconds: 10
+            initialDelaySeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /readiness
+              port: 9099
+            periodSeconds: 10
           volumeMounts:
             - mountPath: /lib/modules
               name: lib-modules
@@ -162,7 +190,7 @@ spec:
         # This container installs the Calico CNI binaries
         # and CNI network config file on each node.
         - name: install-cni
-          image: calico/cni:v1.5.6
+          image: docker2.yidian.com:5000/k8simages/cni:v1.10.0
           command: ["/install-cni.sh"]
           env:
             # The location of the Calico etcd cluster.
@@ -235,9 +263,10 @@ spec:
       # The policy controller must run in the host network namespace so that
       # it isn't governed by policy that would prevent it from working.
       hostNetwork: true
+      serviceAccountName: calico-policy-controller
       containers:
         - name: calico-policy-controller
-          image: calico/kube-policy-controller:v0.5.2
+          image: docker2.yidian.com:5000/k8simages/kube-policy-controller:v0.7.0
           env:
             # The location of the Calico etcd cluster.
             - name: ETCD_ENDPOINTS
@@ -284,74 +313,16 @@ spec:
 
 ---
 
-## This manifest deploys a Job which performs one time
-# configuration of Calico
-apiVersion: batch/v1
-kind: Job
+apiVersion: v1
+kind: ServiceAccount
 metadata:
-  name: configure-calico
+  name: calico-policy-controller
   namespace: kube-system
-  labels:
-    k8s-app: calico
-spec:
-  template:
-    metadata:
-      name: configure-calico
-      annotations:
-        scheduler.alpha.kubernetes.io/critical-pod: ''
-        scheduler.alpha.kubernetes.io/tolerations: |
-          [{"key": "dedicated", "value": "master", "effect": "NoSchedule" },
-           {"key":"CriticalAddonsOnly", "operator":"Exists"}]
-    spec:
-      hostNetwork: true
-      restartPolicy: OnFailure
-      containers:
-        # Writes basic configuration to datastore.
-        - name: configure-calico
-          image: calico/ctl:v1.0.2
-          args:
-          - apply
-          - -f
-          - /etc/config/calico/ippool.yaml
-          volumeMounts:
-            - name: config-volume
-              mountPath: /etc/config
-            # Mount in the etcd TLS secrets.
-            - mountPath: /calico-secrets
-              name: etcd-certs
-          env:
-            # The location of the etcd cluster.
-            - name: ETCD_ENDPOINTS
-              valueFrom:
-                configMapKeyRef:
-                  name: calico-config
-                  key: etcd_endpoints
-            # Location of the CA certificate for etcd.
-            - name: ETCD_CA_CERT_FILE
-              valueFrom:
-                configMapKeyRef:
-                  name: calico-config
-                  key: etcd_ca
-            # Location of the client key for etcd.
-            - name: ETCD_KEY_FILE
-              valueFrom:
-                configMapKeyRef:
-                  name: calico-config
-                  key: etcd_key
-            # Location of the client certificate for etcd.
-            - name: ETCD_CERT_FILE
-              valueFrom:
-                configMapKeyRef:
-                  name: calico-config
-                  key: etcd_cert
-      volumes:
-        - name: config-volume
-          configMap:
-            name: calico-config
-            items:
-            - key: ippool.yaml
-              path: calico/ippool.yaml
-        # Mount in the etcd TLS secrets.
-        - name: etcd-certs
-          secret:
-            secretName: calico-etcd-secrets
+
+---
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: calico-node
+  namespace: kube-system

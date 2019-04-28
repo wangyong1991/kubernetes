@@ -162,7 +162,7 @@ function install_masters()
 {
   sudo ansible ${ANSIBLE_K8S_MASTERS} --private-key=k8s_rsa -u ${KUBE_USER} -m copy -a "src=k8sworker_setup.sh dest=~/k8sworker_setup.sh" --sudo
   sudo ansible ${ANSIBLE_K8S_MASTERS} --private-key=k8s_rsa -u ${KUBE_USER} -m command -a 'sh ~/k8sworker_setup.sh' --sudo
-  sudo ansible ${ANSIBLE_K8S_MASTERS} --private-key=k8s_rsa -u ${KUBE_USER} -m command -a 'sed -i \'s/insecure-port=0/insecure-port=8080/g' /etc/kubernetes/manifests/kube-apiserver.yaml' --sudo
+  # sudo ansible ${ANSIBLE_K8S_MASTERS} --private-key=k8s_rsa -u ${KUBE_USER} -m command -a 'sed -i \'s/insecure-port=0/insecure-port=8080/g' /etc/kubernetes/manifests/kube-apiserver.yaml' --sudo
 }
 
 function install_nodes()
@@ -201,6 +201,7 @@ function install_kube_dashboard()
 {
   echo "----------------安装 kubernetes-dashboard --------------------"
   # 创建Dashboard UI
+  sed -i "s#k8s.gcr.io#docker2.yidian.com:5000/k8simages#g" calico.yaml
   sudo kubectl create -f kubernetes-dashboard.yaml
   sudo kubectl -n kube-system get service kubernetes-dashboard
 }
@@ -208,8 +209,12 @@ function install_kube_dashboard()
 function install_calico()
 {
   echo "----------------安装 Calico 网络插件--------------------"
+  sudo docker pull docker2.yidian.com:5000/k8simages/ctl:v1.10.0
+  sudo docker pull docker2.yidian.com:5000/k8simages/kube-policy-controller:v0.7.0
+  sudo docker pull docker2.yidian.com:5000/k8simages/node:v2.5.1
   sudo kubectl apply -f rbac.yaml
   sed -i "s/etcd_endpoints: .*/etcd_endpoints: ${IP}:2379/g" calico.yaml
+  sed -i "s#quay.io/calico#docker2.yidian.com:5000/k8simages#g" calico.yaml
   sudo kubectl apply -f calico.yaml
 }
 
@@ -218,6 +223,7 @@ function install_flannel()
   echo "----------------安装 Flannel 网络插件 --------------------"
   sudo kubectl apply -f rbac.yaml
   sudo sysctl net.bridge.bridge-nf-call-iptables=1
+  sed -i "s#quay.io/coreos#docker2.yidian.com:5000/k8simages#g" calico.yaml
   sudo kubectl apply -f kube-flannel.yml
 }
 
@@ -319,14 +325,14 @@ if [ "${INIT_KUBEADM}" = "true" ];then
   check_cmd_result
 
   install_kube_dashboard
-  install_calico
+  install_flannel
 else
   create_token
 fi
 
-if [ "${NEED_KUBE_DASHBOARD}" = "true" ];then
-  install_kube_dashboard
-if
+# if [ "${NEED_KUBE_DASHBOARD}" = "true" ];then
+#   install_kube_dashboard
+# if
 
 # 如果不包含，则获取 token，拼接 kubeadm join 命令
 echo ${KUBEADM_JOIN_CMD}

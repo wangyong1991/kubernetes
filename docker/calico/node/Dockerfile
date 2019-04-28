@@ -1,3 +1,3 @@
-FROM quay.io/calico/node:v1.0.2
+FROM quay.io/calico/node:v2.5.1
 MAINTAINER WangYong
 

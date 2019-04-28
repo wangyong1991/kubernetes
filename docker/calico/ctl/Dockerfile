@@ -1,3 +1,3 @@
-FROM calico/ctl:v1.0.2
+FROM calico/ctl:v1.10.0
 MAINTAINER WangYong
 

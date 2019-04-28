@@ -122,7 +122,7 @@ spec:
     spec:
       containers:
       - name: kubernetes-dashboard
-        image: docker2.yidian.com:5000/k8simages/kubernetes-dashboard-amd64:v1.10.1
+        image: k8s.gcr.io/kubernetes-dashboard-amd64:v1.10.1
         ports:
         - containerPort: 8443
           protocol: TCP
@@ -131,7 +131,7 @@ spec:
           # Uncomment the following line to manually specify Kubernetes API server Host
           # If not specified, Dashboard will attempt to auto discover the API server and connect
           # to it. Uncomment only if the default does not work.
-          # - --apiserver-host=http://10.136.157.23:8080
+          # - --apiserver-host=http://my-address:port
         volumeMounts:
         - name: kubernetes-dashboard-certs
           mountPath: /certs
@@ -173,4 +173,3 @@ spec:
       targetPort: 8443
   selector:
     k8s-app: kubernetes-dashboard
-  type: NodePort
