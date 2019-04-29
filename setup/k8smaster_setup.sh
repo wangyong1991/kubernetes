@@ -6,10 +6,11 @@ function help_info ()
     echo "
     命令示例：sh k8smaster_setup.sh -m \"10.120.200.1,10.120.200.2,10.120.200.3\" \
                                    -n \"10.120.200.4,10.120.200.5,10.120.200.6\" \
-                                   -u root -p 123456 -v 1.13.1
+                                   -u root -p 123456 -v 1.13.1 -a yes
     参数说明:
+        -a:admin        生成管理员账户
         -m:masters      master IP列表，用逗号分隔
-        -n:nodes        node IP列表，用逗号分隔
+        -n:nodes        node IP列表，用逗号分隔 
         -u:user         用户名，默认为当前登录用户
         -p:password     用户密码
         -v:version      kubernetes版本，默认为1.13.1
@@ -206,6 +207,16 @@ function install_kube_dashboard()
   sudo kubectl -n kube-system get service kubernetes-dashboard
 }
 
+function create_dashboard_admin()
+{
+  if [ "${CREATE_ADMIN_SA}" = "yes" ];then
+    echo "----------------生成管理员账户--------------------"
+    kubectl create -f admin-sa.yaml
+    ADMIN_TOKEN_NAME=`kubectl get secret -n kube-system|grep admin-token | awk '{print $1}'`
+    ADMIN_SA_TOKEN=`kubectl get secret ${ADMIN_TOKEN_NAME} -o jsonpath={.data.token} -n kube-system |base64 -d`
+  fi
+}
+
 function install_calico()
 {
   echo "----------------安装 Calico 网络插件--------------------"
@@ -230,9 +241,12 @@ function install_flannel()
 
 OLD_IFS="$IFS" 
 IFS="," 
-while getopts ":d:m:n:p:u:vh" opt
+while getopts "a:d:m:n:p:u:vh" opt
 do
     case $opt in
+        a)
+            CREATE_ADMIN_SA="yes"
+            ;;
         d)
             NEED_KUBE_DASHBOARD=($OPTARG)
             ;;
@@ -268,7 +282,7 @@ IFS="$OLD_IFS"
 
 # cd ~
 
-IP=`/sbin/ifconfig -a|grep inet|grep -v 127.0.0.1|grep -v inet6|awk '{print $2}'|tr -d "addr:" | tail -1`
+IP=`ip addr | grep 'state UP' -A2 | grep -v 'veth\|link\|inet6\|cni\|--' | tail -n1 | awk '{print $2}' | cut -f1 -d '/'`
 if [ "${KUBE_USER}" = "" ];then
   KUBE_USER=`whoami`
 fi
@@ -352,5 +366,17 @@ nodes_join
 check_cmd_result
 # 清理hosts文件，保护用户隐私
 sudo rm -f /etc/ansible/hosts
+# 输出kubernetes-dashboard信息
+sudo kubectl -n kube-system get service kubernetes-dashboard
+
+# 生成管理员账户
+create_dashboard_admin
+if [ "${ADMIN_SA_TOKEN}" != "" ];then
+  echo "管理员账户 Token 为："
+  echo ""
+  echo ${ADMIN_SA_TOKEN}
+  echo ""
+fi
+
 echo "集群节点列表："
 kubectl get nodes
