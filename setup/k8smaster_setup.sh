@@ -6,9 +6,8 @@ function help_info ()
     echo "
     命令示例：sh k8smaster_setup.sh -m \"10.120.200.1,10.120.200.2,10.120.200.3\" \
                                    -n \"10.120.200.4,10.120.200.5,10.120.200.6\" \
-                                   -u root -p 123456 -v 1.13.1 -d true
+                                   -u root -p 123456 -v 1.13.1
     参数说明:
-        -d:dashboard    是否安装 kube-dashboard ,默认为false
         -m:masters      master IP列表，用逗号分隔
         -n:nodes        node IP列表，用逗号分隔
         -u:user         用户名，默认为当前登录用户
@@ -62,7 +61,7 @@ function setup_ansible()
   echo "[${ANSIBLE_K8S_MASTERS}]" >> k8s_hosts
   for host in ${K8S_MASTER_LIST[@]}; do
     if [ "${host}" != "${IP}" ];then
-      echo ${host} >> k8s_hosts
+      echo ${host} ansible_ssh_user=${KUBE_USER} ansible_ssh_port=22 ansible_ssh_pass=${PASSWD} >> k8s_hosts
     fi
   done
 
@@ -70,12 +69,13 @@ function setup_ansible()
 
   echo "[${ANSIBLE_K8S_NODES}]" >> k8s_hosts
   for host in ${K8S_NODE_LIST[@]}; do
-    echo ${host} >> k8s_hosts
+    echo ${host} ansible_ssh_user=${KUBE_USER} ansible_ssh_port=22 ansible_ssh_pass=${PASSWD} >> k8s_hosts
   done
 
   echo "/etc/ansible/hosts 内容如下："
   cat k8s_hosts
   sudo mv k8s_hosts /etc/ansible/hosts
+  sudo sed -i 's/.*\(host_key_checking\)/\1/' /etc/ansible/ansible.cfg
 }
 
 
@@ -201,7 +201,7 @@ function install_kube_dashboard()
 {
   echo "----------------安装 kubernetes-dashboard --------------------"
   # 创建Dashboard UI
-  sed -i "s#k8s.gcr.io#docker2.yidian.com:5000/k8simages#g" calico.yaml
+  sed -i "s#k8s.gcr.io#docker2.yidian.com:5000/k8simages#g" kubernetes-dashboard.yaml
   sudo kubectl create -f kubernetes-dashboard.yaml
   sudo kubectl -n kube-system get service kubernetes-dashboard
 }
@@ -223,7 +223,7 @@ function install_flannel()
   echo "----------------安装 Flannel 网络插件 --------------------"
   sudo kubectl apply -f rbac.yaml
   sudo sysctl net.bridge.bridge-nf-call-iptables=1
-  sed -i "s#quay.io/coreos#docker2.yidian.com:5000/k8simages#g" calico.yaml
+  sed -i "s#quay.io/coreos#docker2.yidian.com:5000/k8simages#g" kube-flannel.yml
   sudo kubectl apply -f kube-flannel.yml
 }
 
@@ -266,7 +266,7 @@ do
 done
 IFS="$OLD_IFS"
 
-cd ~
+# cd ~
 
 IP=`/sbin/ifconfig -a|grep inet|grep -v 127.0.0.1|grep -v inet6|awk '{print $2}'|tr -d "addr:" | tail -1`
 if [ "${KUBE_USER}" = "" ];then
@@ -311,7 +311,8 @@ if [  $? -ne 0 ];then
   sudo yum install -y expect
 fi
 
-easy_connect
+# 配置ssh免密登录
+# easy_connect
 check_cmd_result
 setup_ansible
 check_cmd_result
@@ -349,5 +350,7 @@ install_nodes
 check_cmd_result
 nodes_join
 check_cmd_result
+# 清理hosts文件，保护用户隐私
+sudo rm -f /etc/ansible/hosts
 echo "集群节点列表："
 kubectl get nodes
